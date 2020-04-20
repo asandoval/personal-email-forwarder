@@ -5,9 +5,9 @@ import os
 import boto3
 
 
-HOST = os.getenv('HOST', 'imap.mail.me.com')
+HOST = os.getenv('HOST', 'imap.mail.us-east-1.awsapps.com')
 PORT = os.getenv('PORT', 993)
-USER = os.getenv('USER', 'anthony.j.sandoval@me.com')
+USER = os.getenv('USER', 'anthony@sdval.com')
 PASS = os.getenv('PASS')
 S3 = boto3.client('s3')
 
@@ -24,8 +24,11 @@ def email_created_s3(event, context):
         receipt = msg['receipt']
         spam = receipt['spamVerdict']['status']
         mailbox = 'Inbox'
+        flags = None
         if spam != 'PASS':
             mailbox = 'Junk'
+        if 'anthony@sdval.com' in receipt['recipients']:
+            continue
         action = receipt['action']
         bucket = action['bucketName']
         key = action['objectKey']
@@ -34,5 +37,5 @@ def email_created_s3(event, context):
         logger.info("body: {}".format(type(raw_mail)))
         M = imaplib.IMAP4_SSL(host=HOST, port=PORT)
         M.login(USER, PASS)
-        M.append(mailbox, None, None, raw_mail)
+        M.append(mailbox, flags, None, raw_mail)
         M.logout()
