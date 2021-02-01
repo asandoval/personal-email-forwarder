@@ -3,10 +3,6 @@ import json
 import logging
 import os
 import boto3
-from dotenv import load_dotenv
-
-
-load_dotenv()
 
 
 HOST = os.getenv('HOST', 'imap.mail.us-east-1.awsapps.com')
@@ -22,42 +18,51 @@ conn = imaplib.IMAP4_SSL(host=HOST, port=PORT)
 conn.login(USER, PASS)
 
 
-def created_s3(event, context):
+def s3_message(event, context):
     logger.info(event)
     for record in event['Records']:
         assert record['EventSource'] == 'aws:sns'
-        mail = json.loads(record['Sns']['Message'], object_hook=mail_decoder)
-        mail.insert(conn)
+        message = json.loads(record['Sns']['Message'], cls=MessageDecoder)
+        message.insert(conn)
     conn.logout()
 
 
-def mail_decoder(msg):
-    logger.info("Message received from SNS: {}".format(msg))
-    return Mail(msg)
+class MessageDecoder(json.JSONDecoder):
+    def __init__(self, *args, **kwargs):
+        json.JSONDecoder.__init__(self, object_hook=self.object_hook, *args, **kwargs)
+    
+    def object_hook(self, dct):
+        if 'notificationType' in dct:
+            mail = dct.get('mail')
+            recipients, bucket, key = _decode_receipt(dct.get('receipt'))
+            return Message(mail, recipients, bucket, key)
+        return dct
 
 
-class Mail:
+def _decode_receipt(receipt):
+    recipients = receipt['recipients']
+    bucket = receipt['action']['bucketName']
+    key = receipt['action']['objectKey']
+    return recipients, bucket, key
 
-    def __init__(self, msg):
-        self.msg = msg
+
+class Message:
+    def __init__(self, mail, recipients, bucket, key):
+        self.mail = mail
         self.mailbox = 'Inbox'
         self.flags = None
-
-    @property
-    def receipt(self):
-        return self.msg.get('receipt')
-
-    def spam(self):
-        if self.receipt.get('spamVerdict').get('status') != 'PASS':
-            self.mailbox = 'Junk'
+        self.bucket = bucket
+        self.key = key
     
     def raw_mail(self):
-        action = self.receipt.get('action')
-        bucket = action.get('bucketName')
-        key = action.get('objectKey')
-        o = S3.get_object(Bucket=bucket, Key=key)
+        o = S3.get_object(Bucket=self.bucket, Key=self.key)
         raw_mail = o['Body'].read()
         return raw_mail
-
+    
     def insert(self, conn):
-        conn.append(self.mailbox, self.flags, None, self.raw_mail())
+        raw_mail = self.raw_mail()
+        conn.append(self.mailbox, self.flags, None, raw_mail)
+
+    def _spam(self):
+        if self.get('spamVerdict').get('status') != 'PASS':
+            self.mailbox = 'Junk'
